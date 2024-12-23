@@ -75,7 +75,7 @@ class SyncRedisConsumer():
         conn (redis.Redis): The Redis connection object.
         pubsub (redis.client.PubSub): The Redis pubsub object for message subscription.
     """
-    def __init__(self, channel:str):
+    def __init__(self, channel:str | List[str]):
         """
         Initializes the SyncRedisConsumer with a Redis connection and subscribes to the specified channel.
 
@@ -83,9 +83,15 @@ class SyncRedisConsumer():
             channel (str): The Redis channel to subscribe to.
         """
         self.conn: redis.Redis = redis_connecttion()
-        self.pubsub = self.conn.pubsub()
-        self.pubsub.subscribe(channel)
-        self.pubsub.ignore_subscribe_messages = True
+        if type(channel) == str:
+            self.pubsub = self.conn.pubsub()
+            self.pubsub.subscribe(channel)
+            self.pubsub.ignore_subscribe_messages = True
+        else:
+            self.pubsubs = [self.conn.pubsub() for i in range(len(channel))]
+            for i in range(len(channel)):
+                self.pubsubs[i].subscribe(channel[i])
+                self.pubsubs[i].ignore_subscribe_messages = True
     
     def convert_messages(self, message):
         """
@@ -98,7 +104,10 @@ class SyncRedisConsumer():
             object: The decoded message object.
         """
         rc = RedisDecoder()
-        message_objs = rc.decode(message["data"])
+        if type(message) == list:
+            message_objs = [rc.decode(m["data"]) for m in message]
+        else:
+            message_objs = rc.decode(message["data"])
         return message_objs
     
     def consume(self, messages)-> bool:
@@ -112,6 +121,34 @@ class SyncRedisConsumer():
             bool: Return True to continue, False to stop.
         """
         return
+
+
+class RedisStream:
+    def __init__(self) -> None:
+        self.conn = redis_connecttion()
+    
+    def produce(self, stream_key: str, data: RedisEncoder):
+        json_data = data.encode()
+        print(stream_key, json_data)
+        self.conn.xadd(stream_key, {'data': json_data})
+        print(self.conn.xlen(stream_key))
+
+class RedisStreamConsumer:
+    def __init__(self) -> None:
+        self.conn = redis_connecttion()
+
+    def consume(self, stream_key) -> dict:
+        stream_len = self.conn.xlen(stream_key)
+        messages = self.conn.xrange(stream_key, min='-', max='+')
+        decoder = RedisDecoder()
+        stream = list()
+        for id, data in messages:
+            stream.append(decoder.decode(data[b'data']))
+        return stream
+    
+    def consume_blocking(self, stream_key):
+        decoder = RedisDecoder()
+        self.conn.xread(streams={stream_key: '$'})
 
 
 class RedisProducer(threading.Thread):

@@ -3,10 +3,9 @@ import numpy as np
 import cv2 as cv
 import mediapipe as mp
 from typing import *
-
-from parallelism import RedisProducer, RedisEncoder, RedisConsumer, SyncRedisProducer
+from collections import namedtuple
+from parallelism import RedisEncoder, RedisStream, SyncRedisProducer, SyncRedisConsumer
 from projection import project3d
-from visualization import Visualizer
 
 
 RunningMode = mp.tasks.vision.RunningMode
@@ -14,6 +13,35 @@ BaseOptions = mp.tasks.BaseOptions
 HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
 HandLandmarker = mp.tasks.vision.HandLandmarker
 HandLandmarkerResult = mp.tasks.vision.HandLandmarkerResult
+Connections = mp.tasks.vision.HandLandmarksConnections
+
+AngleKeyPointConnections = namedtuple('AngleKeyPointConnections', ['start', 'end'])
+keypoint_connections = [
+    # thumb
+    (AngleKeyPointConnections(start=0, end=1), AngleKeyPointConnections(start=1, end=2)),
+    (AngleKeyPointConnections(start=1, end=2), AngleKeyPointConnections(start=2, end=3)),
+    (AngleKeyPointConnections(start=2, end=3), AngleKeyPointConnections(start=3, end=4)),
+
+    # index
+    (AngleKeyPointConnections(start=1, end=5), AngleKeyPointConnections(start=5, end=6)),
+    (AngleKeyPointConnections(start=5, end=6), AngleKeyPointConnections(start=6, end=7)),
+    (AngleKeyPointConnections(start=6, end=7), AngleKeyPointConnections(start=7, end=8)),
+
+    # middle
+    (AngleKeyPointConnections(start=0, end=9), AngleKeyPointConnections(start=9, end=10)),
+    (AngleKeyPointConnections(start=9, end=10), AngleKeyPointConnections(start=10, end=11)),
+    (AngleKeyPointConnections(start=10, end=11), AngleKeyPointConnections(start=11, end=12)),
+
+    # ring
+    (AngleKeyPointConnections(start=0, end=13), AngleKeyPointConnections(start=13, end=14)),
+    (AngleKeyPointConnections(start=13, end=14), AngleKeyPointConnections(start=14, end=15)),
+    (AngleKeyPointConnections(start=14, end=15), AngleKeyPointConnections(start=15, end=16)),
+
+    # pinky
+    (AngleKeyPointConnections(start=0, end=17), AngleKeyPointConnections(start=17, end=18)),
+    (AngleKeyPointConnections(start=17, end=18), AngleKeyPointConnections(start=18, end=19)),
+    (AngleKeyPointConnections(start=18, end=19), AngleKeyPointConnections(start=19, end=20)),
+]
 
 def configure_mp_options(model_path: str, running_mode=RunningMode.LIVE_STREAM, result_callback=lambda x, y, z: print("Default:", x)):
     # configure pose landmarker
@@ -56,6 +84,12 @@ class Landmarker3D(RedisEncoder):
         self.points = points
         self.terminate = terminate
 
+class KeyPointAngles(RedisEncoder):
+    def __init__(self, timestamp, thetas, rotation_axes) -> None:
+        super().__init__()
+        self.timestamp = timestamp
+        self.thetas = thetas
+        self.rotation_axes = rotation_axes
 
 class Landmarker():
     """
@@ -97,8 +131,8 @@ class Landmarker():
             numpy.ndarray: The rectified image frame.
         """
         r_frame = cv.remap(frame, self.remap_x, self.remap_y, cv.INTER_LANCZOS4)
-        cv.imwrite("recitfied_frame_{}.png".format(self.cam_id), r_frame)
-        return frame
+        # cv.imwrite("recitfied_frame_{}.png".format(self.cam_id), r_frame)
+        return r_frame
 
     def handle_result(self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int) -> None:
         """
@@ -147,7 +181,7 @@ class Landmarker():
         return False
 
 
-class RedisLandmarker(Landmarker, RedisProducer):
+class RedisLandmarker(Landmarker, SyncRedisProducer):
     """
     A class that extends the Landmarker and RedisProducer classes, combining hand landmark detection with Redis messaging.
 
@@ -157,7 +191,7 @@ class RedisLandmarker(Landmarker, RedisProducer):
     """
     def __init__(self, channel: str, cam_id: int) -> None:
         Landmarker.__init__(self, cam_id)
-        RedisProducer.__init__(self, channel)
+        SyncRedisProducer.__init__(self, channel)
     
     def handle_result(self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int) -> None:
         """
@@ -168,10 +202,14 @@ class RedisLandmarker(Landmarker, RedisProducer):
             output_image (mp.Image): The image with landmarks overlayed.
             timestamp_ms (int): The timestamp when the result was produced.
         """
-        if len(result.hand_landmarks) > 0:
-            print("Detect in {}".format(self.cam_id))
+        if len(result.hand_landmarks) < 1:
+            return
+        
+        print("Detect in {}".format(self.cam_id))
         extended_result = RedisHandlandMarkerResult(self.cam_id, timestamp_ms, result)
         self.produce(extended_result)
+
+        
     
     def run(self) -> None:
         """
@@ -182,15 +220,16 @@ class RedisLandmarker(Landmarker, RedisProducer):
         self.produce(terminate)
 
 
-class StereoLandmarker(RedisConsumer, SyncRedisProducer):
+class StereoLandmarker(SyncRedisConsumer, SyncRedisProducer):
     """
     A class that combines RedisConsumer and SyncRedisProducer, used for consuming hand landmark detection results from two cameras and producing 3D points.
     """
-    def __init__(self, ) -> None:
-        RedisConsumer.__init__(self, ["channel_cam_0", "channel_cam_1"])
+    def __init__(self) -> None:
+        SyncRedisConsumer.__init__(self, ["channel_cam_0", "channel_cam_1"])
         SyncRedisProducer.__init__(self, "channel_points_3d")
+
     
-    def consume(self, message_objs: List[RedisHandlandMarkerResult]) -> bool:
+    def consume(self, message_objs: List[RedisHandlandMarkerResult]):
         """
         Consumes messages containing hand landmark detection results, checks for landmarks in both frames, and produces 3D points.
 
@@ -200,16 +239,9 @@ class StereoLandmarker(RedisConsumer, SyncRedisProducer):
         Returns:
             bool: Returns True to keep consuming if landmarks are not detected in both frames, False to stop consuming if terminated.
         """
-        # check for termination condition
-        terminate = any([message_obj.terminate for message_obj in message_objs])
-        if terminate:
-            self.produce(Landmarker3D([], terminate=True))
-            return False
-
         # check if landmark have been detected in both frames
-        landmark_check = [check_for_landmarks(message_obj) for message_obj in message_objs]
-        print(landmark_check)
-        if not all(landmark_check):
+        
+        if not(message_objs[0].result.hand_landmarks and message_objs[1].result.hand_landmarks):
             # keep listening
             print("exit as no landmark detected")
             return True
@@ -217,16 +249,78 @@ class StereoLandmarker(RedisConsumer, SyncRedisProducer):
 
         # get points for each camera
         landmarks = landmarks_to_numpy(message_objs)
-        print("landmark shape", landmarks.shape)
         # get 3d points for each camera
         points3d = project3d(landmarks[:, 0], landmarks[:, 1], "calibration")
-        print("points 3d shape", points3d.shape)
         l3d = Landmarker3D(points3d.tolist())
         # l3d = Landmarker3D(world_landmarks(message_objs))
         # print("+"*30, l3d.shape)
         # push them into a pub/sub queue
         self.produce(l3d)
-        return True
+    
+    def run(self) -> None:
+        """
+        Starts listening to messages on multiple channels, converting and consuming them.
+        """
+        while True:
+            for m1, m2 in zip(self.pubsubs[0].listen(), self.pubsubs[1].listen()):
+                transformed_messages = self.convert_messages([m1, m2])
+                keep_listening = self.consume(transformed_messages)
+                if not keep_listening:
+                    break
+            
+
+class KeyPointAngleRecorder(SyncRedisConsumer, RedisStream):
+    def __init__(self, channel: str | List[str]):
+        SyncRedisConsumer.__init__(self, channel)
+        RedisStream.__init__(self)
+
+
+    def run(self):
+        # get 3D key points from the redis channel
+        start_time = None
+        for message in self.pubsub.listen():
+            if start_time:
+                timestamp = datetime.now() - start_time
+            else:
+                timestamp = timedelta(seconds=0, microseconds=0)
+                start_time = datetime.now()
+            if timestamp > timedelta(seconds=30):
+                break
+            message = self.convert_messages(message)
+            thetas, rotation_axes = self.extract_rotation_axis_angle_v2(message.points)
+             # add them to redis stream, create a new stream everytime run is invoked
+            self.produce(start_time.strftime('%Y-%m-%d-%s'), KeyPointAngles(timestamp=timestamp, thetas=thetas, rotation_axes=rotation_axes))
+        return False
+    
+    def extract_rotation_axis_angle(self, points: List):
+        eps = 1e-10
+        thetas = list()
+        rotation_axes = list()
+        for connection in Connections.HAND_CONNECTIONS:
+            # calculate angles and rotation axis between keypoints
+            landmark_1, landmark_2 = points[connection.start], points[connection.end]
+            theta = float(np.arccos(np.clip(np.dot(landmark_1, landmark_2) / (np.linalg.norm(landmark_1) * np.linalg.norm(landmark_2)), -1, 1)))
+            rotation_axis = np.cross(landmark_1, landmark_2)
+            axis_norm = np.linalg.norm(rotation_axis) + eps
+            rotation_axis = rotation_axis / axis_norm
+            thetas.append(theta)
+            rotation_axes.append(rotation_axis.tolist())
+        return thetas, rotation_axes
+    
+    def extract_rotation_axis_angle_v2(self, points: List):
+        thetas = list()
+        rotation_axes = list()
+        for start_connection, end_connection in keypoint_connections:
+            # calculate angles and rotation axis between keypoints
+            vec_1 = np.array(points[start_connection.start]) - np.array(points[start_connection.end])
+            vec_2 = np.array(points[end_connection.start]) - np.array(points[end_connection.end])
+            theta = float(np.arccos(np.dot(vec_1, vec_2) / (np.linalg.norm(vec_1) * np.linalg.norm(vec_2))))
+            rotation_axis = np.cross(vec_1, vec_2)
+            rotation_axis = rotation_axis / np.linalg.norm(rotation_axis)
+            thetas.append(theta)
+            rotation_axes.append(rotation_axis.tolist())
+        return thetas, rotation_axes
+
 
 
 def world_landmarks(message_objs: List[RedisHandlandMarkerResult]):
@@ -270,8 +364,6 @@ def normalized_to_pixel_coordinates(
 
   if not (is_valid_normalized_value(normalized_x) and
           is_valid_normalized_value(normalized_y)):
-    # TODO: Draw coordinates even if it's outside of the image bounds.
-    print("*"*50)
     return -1, -1
   x_px = min(np.floor(normalized_x * image_width), image_width - 1)
   y_px = min(np.floor(normalized_y * image_height), image_height - 1)
