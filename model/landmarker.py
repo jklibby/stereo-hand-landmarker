@@ -4,6 +4,8 @@ import cv2 as cv
 import mediapipe as mp
 from typing import *
 from collections import namedtuple
+from collections import deque
+
 from parallelism import RedisEncoder, RedisStream, SyncRedisProducer, SyncRedisConsumer
 from projection import project3d
 
@@ -106,7 +108,9 @@ class Landmarker():
         self.model_path = "model/handlandmarker_models/hand_landmarker.task"
         self.cap: cv.VideoCapture = cv.VideoCapture(cam_id)
         self.cam_id = cam_id
-        print(self.cam_id)
+        
+        self.q = deque([])
+        self.hsv = HandlandmarkVideoStream(cam_id)
         
         options = configure_mp_options(self.model_path, result_callback=self.handle_result)
         self.landmarker = HandLandmarker.create_from_options(options)
@@ -164,7 +168,8 @@ class Landmarker():
             ret, frame = self.cap.read()
             if not ret:
                 break
-            timestamp = (datetime.now() - start).total_seconds() * 1e3
+            
+            timestamp = (datetime.now() - init_time).total_seconds() * 1e3
             mp_timestamp = mp.Timestamp.from_seconds(timestamp).value
 
             # recitfy frame
@@ -172,10 +177,14 @@ class Landmarker():
 
             mp_frame = mp.Image(image_format=mp.ImageFormat.SRGB, data=rectified_frame)
             self.landmarker.detect_async(mp_frame, mp_timestamp)
+            print("reading frame...", mp_timestamp)
 
-            # cv.imshow("Cam: {}".format(self.cam_id), frame)
-            # if timestamp > 2*1e4:
-            #     break
+            while self.q:
+                detected_landmarks = self.q.popleft()
+                landmark_frame = self.hsv.consume(rectified_frame)
+                cv.imshow("Frame 1", landmark_frame)
+                cv.waitKey(1)
+
         self.cap.release()
         cv.destroyAllWindows()
         return False
@@ -202,12 +211,14 @@ class RedisLandmarker(Landmarker, SyncRedisProducer):
             output_image (mp.Image): The image with landmarks overlayed.
             timestamp_ms (int): The timestamp when the result was produced.
         """
+        print("in async...", len(result.hand_landmarks), timestamp_ms)
         if len(result.hand_landmarks) < 1:
             return
         
         print("Detect in {}".format(self.cam_id))
         extended_result = RedisHandlandMarkerResult(self.cam_id, timestamp_ms, result)
         self.produce(extended_result)
+        self.q.append(extended_result)
 
         
     
@@ -239,18 +250,25 @@ class StereoLandmarker(SyncRedisConsumer, SyncRedisProducer):
         Returns:
             bool: Returns True to keep consuming if landmarks are not detected in both frames, False to stop consuming if terminated.
         """
+        # check for termination condition
+        # terminate = any([message_obj.terminate for message_obj in message_objs])
+        # if terminate:
+        #     self.produce(Landmarker3D([], terminate=True))
+        #     return False
+
         # check if landmark have been detected in both frames
         
-        if not(message_objs[0].result.hand_landmarks and message_objs[1].result.hand_landmarks):
-            # keep listening
-            print("exit as no landmark detected")
-            return True
-        print("Landmark detected...", message_objs[0].timestamp, message_objs[1].timestamp)
+        # if not(message_objs[0].result.hand_landmarks and message_objs[1].result.hand_landmarks):
+        #     # keep listening
+        #     print("exit as no landmark detected")
+        #     return True
+        print("Landmark detected...", datetime.fromtimestamp(message_objs[0].timestamp*1e-6), datetime.fromtimestamp(message_objs[1].timestamp*1e-6))
 
         # get points for each camera
         landmarks = landmarks_to_numpy(message_objs)
         # get 3d points for each camera
-        points3d = project3d(landmarks[:, 0], landmarks[:, 1], "calibration")
+        points3d = project3d(landmarks[0], landmarks[1], "calibration")
+        print("points 3d shape", points3d.shape)
         l3d = Landmarker3D(points3d.tolist())
         # l3d = Landmarker3D(world_landmarks(message_objs))
         # print("+"*30, l3d.shape)
@@ -261,35 +279,40 @@ class StereoLandmarker(SyncRedisConsumer, SyncRedisProducer):
         """
         Starts listening to messages on multiple channels, converting and consuming them.
         """
-        while True:
-            for m1, m2 in zip(self.pubsubs[0].listen(), self.pubsubs[1].listen()):
-                transformed_messages = self.convert_messages([m1, m2])
-                keep_listening = self.consume(transformed_messages)
-                if not keep_listening:
-                    break
+        while True:            
+            m1 = self.convert_messages(next(self.pubsubs[0].listen()))
+            m2 = self.convert_messages(next(self.pubsubs[1].listen()))
+            while (abs(m1.timestamp-m2.timestamp)*1e-6) > 0.25:
+                print()
+                if m1.timestamp < m2.timestamp:
+                    m1 = self.convert_messages(next(self.pubsubs[0].listen()))
+                else:
+                    m2 = self.convert_messages(next(self.pubsubs[1].listen()))
+            self.consume([m1, m2])
             
 
 class KeyPointAngleRecorder(SyncRedisConsumer, RedisStream):
-    def __init__(self, channel: str | List[str]):
+    def __init__(self, stream_name:str, channel: str | List[str]):
         SyncRedisConsumer.__init__(self, channel)
-        RedisStream.__init__(self)
+        RedisStream.__init__(self, stream_name)
 
 
     def run(self):
         # get 3D key points from the redis channel
         start_time = None
+        max_recording = timedelta(seconds=30)
         for message in self.pubsub.listen():
             if start_time:
                 timestamp = datetime.now() - start_time
             else:
                 timestamp = timedelta(seconds=0, microseconds=0)
                 start_time = datetime.now()
-            if timestamp > timedelta(seconds=30):
+            if timestamp > max_recording:
                 break
             message = self.convert_messages(message)
             thetas, rotation_axes = self.extract_rotation_axis_angle_v2(message.points)
              # add them to redis stream, create a new stream everytime run is invoked
-            self.produce(start_time.strftime('%Y-%m-%d-%s'), KeyPointAngles(timestamp=timestamp, thetas=thetas, rotation_axes=rotation_axes))
+            self.produce(KeyPointAngles(timestamp=timestamp, thetas=thetas, rotation_axes=rotation_axes))
         return False
     
     def extract_rotation_axis_angle(self, points: List):
@@ -337,18 +360,14 @@ def world_landmarks(message_objs: List[RedisHandlandMarkerResult]):
 def landmarks_to_numpy(message_objs: List[RedisHandlandMarkerResult]):
     # 21 landmarks - mediapipe
     all_landmarks = list()
-    for landmark_id in range(21):
-        curr_landmark = list()
-        for message in message_objs:
-            landmark = message.result.hand_landmarks[0][landmark_id]
-            normalized_coordinates = normalized_to_pixel_coordinates(landmark.x, landmark.y, 1920, 1080)
-            curr_landmark.append(normalized_coordinates)
-        all_landmarks.append(curr_landmark)
+    for message in message_objs:
+        all_landmarks.append(np.array(message.result))
     as_numpy = np.array(all_landmarks)
+    print("this shape", as_numpy.shape)
     return as_numpy
 
 def check_for_landmarks(message: RedisHandlandMarkerResult) -> bool:
-    landmarks = message.result.hand_landmarks
+    landmarks = message.result
     return len(landmarks) > 0
 
 
@@ -368,3 +387,45 @@ def normalized_to_pixel_coordinates(
   x_px = min(np.floor(normalized_x * image_width), image_width - 1)
   y_px = min(np.floor(normalized_y * image_height), image_height - 1)
   return x_px, y_px
+
+
+class HandlandmarkVideoStream:
+    def __init__(self, cam_id) -> None:
+        self.cam_id = cam_id
+        
+        remaps = np.load("camera_extrinsics/stereo_rectification/stereo_rectification_maps.npz")
+        if self.cam_id == 0:
+            self.remap_x, self.remap_y = remaps['left_map_x'], remaps['left_map_y']
+        elif self.cam_id == 1:
+            self.remap_x, self.remap_y = remaps['right_map_x'], remaps['right_map_y']
+
+    def consume(self, frame, message):
+        landmark_coords = landmarks_to_numpy(message_objs=[message])
+        # landmark_coords = self.rectify_landmarks(landmark_coords)
+        landmark_frame = self.draw_landmarks(frame, landmark_coords)
+        return landmark_frame
+    
+    def rectify_landmarks(self, landmarks):
+        landmarks = landmarks.reshape((-1, 2))
+        # Convert to integer indices for remap lookup
+        x_rect = np.round(landmarks[:, 0]).astype(int)
+        y_rect = np.round(landmarks[:, 1]).astype(int)
+
+        # Use the remap arrays to get original coordinates
+        x_orig = self.remap_x[y_rect, x_rect]
+        y_orig = self.remap_y[y_rect, x_rect]
+
+        # Combine into (21, 2) shape
+        return np.stack([x_orig, y_orig], axis=1)
+
+
+    def draw_landmarks(self, frame, landmarks):
+        landmarks = np.int32(landmarks)
+        colors = color_bar_np(landmarks.shape[0])
+        for idx, landmark in enumerate(landmarks):
+            cv.circle(frame,landmark, radius=5, color=colors[idx], thickness=1)
+        
+        for idx, connection in enumerate(Connections.HAND_CONNECTIONS):
+            cv.line(frame, landmarks[connection.start], landmarks[connection.end], color=colors[idx], thickness=5)
+        
+        return frame

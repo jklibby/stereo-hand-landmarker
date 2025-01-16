@@ -69,6 +69,9 @@ def Rodrigues_matrix(angle, axis):
     theta = angle
     return np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * K @ K
 
+def load_extrinsics():
+    stereo_calibration = np.load("camera_extrinsics/stereo_calibration.npz")
+    return [stereo_calibration["R"]], [stereo_calibration["T"]]
 
 class Visualizer():
     """
@@ -85,6 +88,12 @@ class Visualizer():
         self.cams = cams
         self.R = R
         self.T = T
+
+        if not (R and T):
+            r, t = load_extrinsics()
+            self.R = r
+            self.T = t
+
         
         self.camera_positions = [np.array([0, 0, 0], dtype=np.float32)]
         for r, t in zip(self.R, self.T):
@@ -251,7 +260,8 @@ def color_bar(length):
     # color_variations = color_bar_np(length) * 255
     color_variations = [[0, 255, 0]] * length
     return o3d.utility.Vector3dVector(color_variations)
- 
+
+
 class StreamingVisualizer(Visualizer, SyncRedisConsumer):
     def __init__(self, cams=2, R=[], T=[]):
         Visualizer.__init__(self, cams, R, T)
@@ -271,22 +281,18 @@ class StreamingVisualizer(Visualizer, SyncRedisConsumer):
             self.update_scene(message.points)
         self.viz.run()
     
-    def consume_stream(self, angle_records):
+    def replay_angles(self, angle_records):
         self.display_scene()
         idx = 0
         sleep_time = (angle_records[-1].timestamp).total_seconds() / len(angle_records)
-        while True:
+        for idx in range(len(angle_records)):
             # if idx > len(angle_records):
             #     break
-            if idx % len(angle_records) == 0:
-                print("*"*50)
             record = angle_records[idx % len(angle_records)]
-            idx += 1
             print("updating... {}".format(idx), record.timestamp)
             rotated_landmarks = self.hands.rotate_landmarks_v2(record.thetas, record.rotation_axes)
             self.update_scene(rotated_landmarks)
             time.sleep(sleep_time)
-        self.viz.run()
 
         
 
@@ -321,15 +327,15 @@ class HandStreamingVisualizer(Visualizer, SyncRedisConsumer):
                 break
 
             # update landmarks and keep rendering
-            points = self.get_world_landmarks(message)
+            points = np.array(message.points)
             if points.shape != (21, 3):
                 continue
             self.update_scene(points.tolist())
             count.append(measure_hand_connections(points))
-            if len(count) > 500:
-                np.save("world_hand_measurements", count)
-                break
-            
+            # if len(count) > 500:
+            #     np.save("world_hand_measurements", count)
+            #     break
+            print("updates scene", points.shape)
         self.viz.run()
 
     def get_world_landmarks(self, message):
@@ -366,14 +372,9 @@ def measure_hand_connections(pcd: np.ndarray):
 
     return res
 
-class HandlandmarkVideoStream(SyncRedisConsumer):
-    def __init__(self, cam_id, channels) -> None:
-        SyncRedisConsumer.__init__(self, channels)
+class HandlandmarkVideoStream:
+    def __init__(self, cam_id) -> None:
         self.cam_id = cam_id
-        self.cap: cv.VideoCapture = cv.VideoCapture(cam_id)
-        if not self.cap.isOpened():
-            print("Cannot open camera: {}".format(cam_id))
-            exit()
         
         remaps = np.load("camera_extrinsics/stereo_rectification/stereo_rectification_maps.npz")
         if self.cam_id == 0:
@@ -381,21 +382,11 @@ class HandlandmarkVideoStream(SyncRedisConsumer):
         elif self.cam_id == 1:
             self.remap_x, self.remap_y = remaps['right_map_x'], remaps['right_map_y']
 
-    def consume(self):
-        while True:
-            message = self.convert_messages(next(self.pubsub.listen()))
-            
-            ret, frame = self.cap.read()
-            if not ret:
-                print("Cannot read frames from cam: {}".format(self.cam_id))
-                break
-            landmark_coords = landmarks_to_numpy(message_objs=[message])
-            landmark_coords = self.rectify_landmarks(landmark_coords)
-            landmark_frame = draw_landmarks(frame, landmark_coords)
-            cv.imshow("Cam: {}".format(self.cam_id), landmark_frame)
-            if cv.waitKeyEx(1) & 0xFF == ord('q'):
-                # publish the terminate message to kill the detection threads as well
-                break
+    def consume(self, frame, message):
+        landmark_coords = landmarks_to_numpy(message_objs=[message])
+        # landmark_coords = self.rectify_landmarks(landmark_coords)
+        landmark_frame = self.draw_landmarks(frame, landmark_coords)
+        return landmark_frame
     
     def rectify_landmarks(self, landmarks):
         landmarks = landmarks.reshape((-1, 2))
@@ -411,13 +402,13 @@ class HandlandmarkVideoStream(SyncRedisConsumer):
         return np.stack([x_orig, y_orig], axis=1)
 
 
-def draw_landmarks(frame, landmarks):
-    landmarks = np.int32(landmarks)
-    colors = color_bar_np(landmarks.shape[0])
-    for idx, landmark in enumerate(landmarks):
-        cv.circle(frame,landmark, radius=5, color=colors[idx], thickness=1)
-    
-    for idx, connection in enumerate(Connections.HAND_CONNECTIONS):
-        cv.line(frame, landmarks[connection.start], landmarks[connection.end], color=colors[idx], thickness=5)
-    
-    return frame
+    def draw_landmarks(self, frame, landmarks):
+        landmarks = np.int32(landmarks)
+        colors = color_bar_np(landmarks.shape[0])
+        for idx, landmark in enumerate(landmarks):
+            cv.circle(frame,landmark, radius=5, color=colors[idx], thickness=1)
+        
+        for idx, connection in enumerate(Connections.HAND_CONNECTIONS):
+            cv.line(frame, landmarks[connection.start], landmarks[connection.end], color=colors[idx], thickness=5)
+        
+        return frame

@@ -124,20 +124,24 @@ class SyncRedisConsumer():
 
 
 class RedisStream:
-    def __init__(self) -> None:
+    def __init__(self, stream_key) -> None:
         self.conn = redis_connecttion()
+        self.stream_key = stream_key
+
+        # check if stream key exists
+        if self.conn.xlen(self.stream_key) > 0:
+            self.conn.xtrim(self.stream_key, 0)
     
-    def produce(self, stream_key: str, data: RedisEncoder):
+    def produce(self, data: RedisEncoder):
         json_data = data.encode()
-        print(stream_key, json_data)
-        self.conn.xadd(stream_key, {'data': json_data})
-        print(self.conn.xlen(stream_key))
+        self.conn.xadd(self.stream_key, {'data': json_data})
+        print(self.conn.xlen(self.stream_key))
 
 class RedisStreamConsumer:
     def __init__(self) -> None:
         self.conn = redis_connecttion()
 
-    def consume(self, stream_key) -> dict:
+    def consume(self, stream_key) -> list:
         stream_len = self.conn.xlen(stream_key)
         messages = self.conn.xrange(stream_key, min='-', max='+')
         decoder = RedisDecoder()

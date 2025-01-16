@@ -1,14 +1,22 @@
 from typing import *
-import math
+import pathlib
 import numpy as np
 
 stereo_calibration = np.load("camera_extrinsics/stereo_calibration.npz")
-intrinsics_1 = np.load("camera_intrinsics/camera_calibration_0.npz")
-intrinsics_2 = np.load("camera_intrinsics/camera_calibration_1.npz")
+
+def load_calibration():
+    intrinsic_dir = pathlib.Path("camera_intrinsics")
+    intrinsics = list()
+    for intrinsic_file in sorted(list(intrinsic_dir.glob("camera_calibration_*.npz"))):
+        intrinsics.append(np.load(intrinsic_file))
+    return intrinsics
+
+
 
 def project3d(p1: np.ndarray, p2: np.ndarray, dir: str, world_scaling:int=1):
-    K1 = intrinsics_1["calibration_mtx"]
-    K2 = intrinsics_2["calibration_mtx"]
+    intrinsics = load_calibration()
+    K1 = intrinsics[0]["calibration_mtx"]
+    K2 = intrinsics[1]["calibration_mtx"]
     R, T = stereo_calibration['R'], stereo_calibration['T']
     
     # projects from camera 2 to camera 1

@@ -6,9 +6,9 @@ from parallelism.redis import RedisStreamConsumer, RedisDecoder
 from datetime import timedelta
 
 def load_extrinsics():
-    dir = "calibration"
     stereo_calibration = np.load("camera_extrinsics/stereo_calibration.npz")
     return [stereo_calibration["R"]], [stereo_calibration["T"]]
+
 
 
 r, t = load_extrinsics()
@@ -17,7 +17,7 @@ r, t = load_extrinsics()
 
 sv = Visualizer(cams=2, R=r, T=t)
 
-# sv.consume()
+sv.consume()
 
 decoder = RedisDecoder()
 rsc = RedisStreamConsumer()
@@ -36,7 +36,7 @@ predicted_keypoints[-1].timestamp = timedelta(seconds=30)
 
 sv.consume_stream(predicted_keypoints)
 
-# '2024-12-08-1733645000' - 5
-# 2024-12-08-1733644569 - 4
-# '2024-12-08-1733642773' - 4
-# 2024-12-08-1733643118 - 4
+'2024-12-08-1733645000' - 5
+2024-12-08-1733644569 - 4
+'2024-12-08-1733642773' - 4
+2024-12-08-1733643118 - 4

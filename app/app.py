@@ -80,14 +80,14 @@ class MyApp(QWidget):
                     return
         # create process from context for single camera landmark detection
         self.processes['cam_0_landmarker'] = self.ctx.Process(target=_create_rlh, args=("channel_cam_0", 0))
-        self.processes['cam_0_visualizer'] = self.ctx.Process(target=_create_hsv, args=("channel_cam_0", 0))
+        #self.processes['cam_0_visualizer'] = self.ctx.Process(target=_create_hsv, args=("channel_cam_0", 0))
 
-        self.processes['cam_1_landmarker'] = self.ctx.Process(target=_create_rlh, args=("channel_cam_1", 1))
-        self.processes['cam_1_visualizer'] = self.ctx.Process(target=_create_hsv, args=("channel_cam_1", 1))
+        # self.processes['cam_1_landmarker'] = self.ctx.Process(target=_create_rlh, args=("channel_cam_1", 1))
+        # self.processes['cam_1_visualizer'] = self.ctx.Process(target=_create_hsv, args=("channel_cam_1", 1))
 
         # create process from context for stereo landmarker
-        self.processes['stereo_landmarker'] = self.ctx.Process(target=_create_stereo_landmarker)
-        self.processes['stereo_landmarker_visualizer'] = self.ctx.Process(target=_create_stereo_hsv)
+        #self.processes['stereo_landmarker'] = self.ctx.Process(target=_create_stereo_landmarker)
+        # self.processes['stereo_landmarker_visualizer'] = self.ctx.Process(target=_create_stereo_hsv)
 
         for process in self.processes.values():
             process.start()
