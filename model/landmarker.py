@@ -235,8 +235,8 @@ class StereoLandmarker(SyncRedisConsumer, SyncRedisProducer):
     """
     A class that combines RedisConsumer and SyncRedisProducer, used for consuming hand landmark detection results from two cameras and producing 3D points.
     """
-    def __init__(self) -> None:
-        SyncRedisConsumer.__init__(self, ["channel_cam_0", "channel_cam_1"])
+    def __init__(self, left_channel, right_channel) -> None:
+        SyncRedisConsumer.__init__(self, [left_channel, right_channel])
         SyncRedisProducer.__init__(self, "channel_points_3d")
 
     
