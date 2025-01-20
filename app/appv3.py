@@ -6,7 +6,7 @@ from datetime import datetime
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QMessageBox
 from collections import OrderedDict
 
-from.test_app import normalized_to_pixel_coordinates, draw_landmarks
+from.appv2 import normalized_to_pixel_coordinates, draw_landmarks
 
 import mediapipe as mp
 

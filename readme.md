@@ -14,16 +14,20 @@ Install [Docker](https://www.docker.com/).
 We can install dependacies using conda. 
 
 ```
-conda env create -n <env-name>  -f environment.yml
+conda env create  -f env.yml
 ```
 
 ```
 conda activate <env-name>
 ```
 
+## Importing Calibration
+
+Add the extrinsics and intrinsics directories to the root of this directory. Rename them to `camera_intrinsics` and `camera_extrinsics`
+
 ## Starting Application
 
-First start Redis using `docker compose`. Make sure you are in the project directory on the terminal. 
+First start Redis using `docker compose up`. Make sure you are in the project directory on the terminal. 
 
 ```
 docker compose up -d
@@ -33,10 +37,5 @@ This will start the redis container in the background.
 
 Run 
 ```
-python o3d.py
-```
-
-Now in another shell run
-```
-python main.py
+python -m app.appv2
 ```

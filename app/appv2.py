@@ -2,6 +2,7 @@ import sys
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QMessageBox, QLineEdit, QFormLayout
 from PyQt5.QtGui import QIntValidator
 import numpy as np
+from pathlib import Path
 from multiprocessing import get_context, Process, Manager
 from multiprocessing.managers import BaseManager
 from visualization import HandStreamingVisualizer, StreamingVisualizer
@@ -92,8 +93,9 @@ def _create_hand_detector(cam_id, init_time):
     elif cam_id == 1:
         remap_x, remap_y = remaps['right_map_x'], remaps['right_map_y']
 
+    model_path = Path("model/handlandmarker_models/hand_landmarker.task")
     options = HandLandmarkerOptions(
-    base_options=BaseOptions(model_asset_path='model\handlandmarker_models\hand_landmarker.task'),
+    base_options=BaseOptions(model_asset_path=str(model_path)),
     running_mode=VisionRunningMode.LIVE_STREAM,
     result_callback=handle)
     with HandLandmarker.create_from_options(options) as landmarker:
