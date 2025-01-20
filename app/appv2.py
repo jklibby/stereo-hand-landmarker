@@ -71,8 +71,10 @@ def _create_checkerboard_detector(cam_id):
         cv.waitKey(1)
 
 
-def _create_stereo_landmarker():
-    sl = StereoLandmarker()
+def _create_stereo_landmarker(left_cam, right_cam):
+    left_channel = "channel_cam_{}".format(left_cam)
+    right_channel = "channel_cam_{}".format(right_cam)
+    sl = StereoLandmarker(left_channel, right_channel)
     sl.run()
 
 def _create_stereo_hsv():
@@ -269,7 +271,7 @@ class MyApp(QWidget):
         init_time = datetime.now() + timedelta(seconds=10)
         self.processes['cb_0'] = self.ctx.Process(target=_create_hand_detector, args=(int(self.cam_id_1.text()), init_time,))
         self.processes['cb_1'] = self.ctx.Process(target=_create_hand_detector, args=(int(self.cam_id_2.text()), init_time, ))
-        self.processes['stereo_landmarker'] = self.ctx.Process(target=_create_stereo_landmarker)
+        self.processes['stereo_landmarker'] = self.ctx.Process(target=_create_stereo_landmarker, args=(int(self.cam_id_1.text()), int(self.cam_id_2.text()),))
         self.processes['stereo_landmarker_visualizer'] = self.ctx.Process(target=_create_stereo_hsv)
 
         for process in self.processes.values():
