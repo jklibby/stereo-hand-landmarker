@@ -269,8 +269,8 @@ class MyApp(QWidget):
         
         # create process from context for single camera landmark detection
         init_time = datetime.now() + timedelta(seconds=10)
-        self.processes['cb_0'] = self.ctx.Process(target=_create_hand_detector, args=(int(self.cam_id_1.text()), init_time,))
-        self.processes['cb_1'] = self.ctx.Process(target=_create_hand_detector, args=(int(self.cam_id_2.text()), init_time, ))
+        self.processes['handDetector_0'] = self.ctx.Process(target=_create_hand_detector, args=(int(self.cam_id_1.text()), init_time,))
+        self.processes['handDetector_1'] = self.ctx.Process(target=_create_hand_detector, args=(int(self.cam_id_2.text()), init_time, ))
         self.processes['stereo_landmarker'] = self.ctx.Process(target=_create_stereo_landmarker, args=(int(self.cam_id_1.text()), int(self.cam_id_2.text()),))
         self.processes['stereo_landmarker_visualizer'] = self.ctx.Process(target=_create_stereo_hsv)
 
